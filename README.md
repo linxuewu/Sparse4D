@@ -13,9 +13,9 @@
 ## Citation
 ```
 @misc{2211.10581,
-Author = {Xuewu Lin and Tianwei Lin and Zixiang Pei and Lichao Huang and Zhizhong Su},
-Title = {Sparse4D: Multi-view 3D Object Detection with Sparse Spatial-Temporal Fusion},
-Year = {2022},
-Eprint = {arXiv:2211.10581},
+  Author = {Xuewu Lin and Tianwei Lin and Zixiang Pei and Lichao Huang and Zhizhong Su},
+  Title = {Sparse4D: Multi-view 3D Object Detection with Sparse Spatial-Temporal Fusion},
+  Year = {2022},
+  Eprint = {arXiv:2211.10581},
 }
 ```
