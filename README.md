@@ -7,7 +7,7 @@
 ## nuScenes Benchmark
 |model|dataset| backbone | img size | mAP |mATE| mASE | mAOE |mAVE| mAAE | NDS | ckpt | log |
 | :---: | :---: | :---: | :---: | :---:|:---:|:---: | :---: | :----: | :----: | :----: | :----: | :----: |
-|Sparse4D|validation|ResNet-101|640x1600|0.4409|0.6282|0.2721|0.3853|0.2922|0.1888|0.5438|[ckpt](https://github.com/linxuewu/Sparse4D/releases/download/v0.0/sparse4d_release.pth)|[log](https://github.com/linxuewu/Sparse4D/releases/download/v0.0/sparse4d.log)|
+|Sparse4D|validation|Res101|640x1600|0.4409|0.6282|0.2721|0.3853|0.2922|0.1888|0.5438|[ckpt](https://github.com/linxuewu/Sparse4D/releases/download/v0.0/sparse4d_release.pth)|[log](https://github.com/linxuewu/Sparse4D/releases/download/v0.0/sparse4d.log)|
 
 
 ## Quick Start
