@@ -298,8 +298,8 @@ class Sparse4DHead(BaseModule):
                     DFG.feature_sampling(
                         [f[i : i + 1] for f in feature_maps],
                         key_points,
-                        data["projection_mat"],
-                        data.get("image_wh"),
+                        data["projection_mat"][i:i+1],
+                        data["image_wh"][i:i+1],
                     )
                     .mean(2)
                     .mean(2)

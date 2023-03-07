@@ -513,19 +513,11 @@ class DeformableFeatureAggregation(BaseModule):
         points_2d = torch.matmul(
             projection_mat[:, :, None, None], pts_extend[:, None, ..., None]
         ).squeeze(-1)
-        mask = points_2d[..., 2] > 1e-5
         points_2d = points_2d[..., :2] / torch.clamp(
             points_2d[..., 2:3], min=1e-5
         )
         points_2d = points_2d / image_wh[:, :, None, None]
         points_2d = points_2d * 2 - 1
-        mask = (
-            mask
-            & (points_2d[..., 0] > -1)
-            & (points_2d[..., 0] < 1)
-            & (points_2d[..., 1] > -1)
-            & (points_2d[..., 1] < 1)
-        )
         points_2d = points_2d.flatten(end_dim=1)
 
         features = []
@@ -536,7 +528,6 @@ class DeformableFeatureAggregation(BaseModule):
                 )
             )
         features = torch.stack(features, dim=1)
-        features = features * mask[:, :, None, None]
         features = features.reshape(
             bs, num_cams, num_levels, -1, num_anchor, num_pts
         ).permute(
