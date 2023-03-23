@@ -1,6 +1,6 @@
 # Sparse4D
 
-Sparse4D v2 will be released soon, which will have lower memory usage, as well as higher training and inference speed.
+Sparse4D v2 will be released soon, which will have lower GPU memory usage, as well as higher training and inference speed.
 
 ## Overall Architecture
 <img src="resources/framework.png" width="1000" >
