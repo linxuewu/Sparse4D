@@ -939,18 +939,18 @@ def output_to_nusc_box(detection):
     if hasattr(box3d, "gravity_center"):
         box_gravity_center = box3d.gravity_center.numpy()
         box_dims = box3d.dims.numpy()
-        nus_box_dims = box_dims[:, [1, 0, 2]]
+        nus_box_dims = box_dims # [:, [1, 0, 2]]
         box_yaw = box3d.yaw.numpy()
     else:
         box3d = box3d.numpy()
         box_gravity_center = box3d[..., :3].copy()
         box_dims = box3d[..., 3:6].copy()
-        nus_box_dims = box_dims[..., [1, 0, 2]]
+        nus_box_dims = box_dims # [..., [1, 0, 2]]
         box_yaw = box3d[..., 6].copy()
 
     # TODO: check whether this is necessary
     # with dir_offset & dir_limit in the head
-    # box_yaw = -box_yaw - np.pi / 2
+    box_yaw = -box_yaw - np.pi / 2
 
     box_list = []
     for i in range(len(box3d)):
