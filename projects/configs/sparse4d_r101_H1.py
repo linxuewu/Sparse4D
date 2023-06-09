@@ -46,11 +46,15 @@ model = dict(
     ),
     head=dict(
         type="Sparse4DHead",
-        num_anchor=900,
-        anchor_file="nuscenes_kmeans900.npy",
-        num_decoder=num_decoder,
-        embed_dims=embed_dims,
         cls_threshold_to_reg=0.05,
+        num_decoder=num_decoder,
+        instance_bank=dict(
+            type="InstanceBank",
+            num_anchor=900,
+            embed_dims=embed_dims,
+            anchor="nuscenes_kmeans900.npy",
+            anchor_handler=dict(type="SparseBox3DKeyPointsGenerator"),
+        ),
         anchor_encoder=dict(
             type="SparseBox3DEncoder",
             embed_dims=embed_dims,
@@ -78,7 +82,7 @@ model = dict(
             num_groups=num_groups,
             num_levels=4,
             num_cams=6,
-            dropout=0.1,
+            proj_drop=0.1,
             kps_generator=dict(
                 type="SparseBox3DKeyPointsGenerator",
                 num_learnable_pts=6,
@@ -98,7 +102,6 @@ model = dict(
             embed_dims=embed_dims,
             num_cls=num_classes,
         ),
-        # pre_norm=True,
         sampler=dict(
             type="SparseBox3DTarget",
             cls_weight=2.0,

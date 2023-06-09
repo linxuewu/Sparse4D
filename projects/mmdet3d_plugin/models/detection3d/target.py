@@ -5,10 +5,9 @@ from scipy.optimize import linear_sum_assignment
 from mmdet3d.core.bbox import BaseInstance3DBoxes
 from mmdet.core.bbox.builder import BBOX_SAMPLERS
 
-__all__ = ["SparseBox3DTarget"]
+from .decoder import X, Y, Z, W, L, H, SIN_YAW, COS_YAW, VX, VY, VZ, YAW
 
-X, Y, Z, W, L, H, SIN_YAW, COS_YAW, VX, VY, VZ = list(range(11))
-YAW = 6
+__all__ = ["SparseBox3DTarget"]
 
 
 @BBOX_SAMPLERS.register_module()
@@ -88,16 +87,19 @@ class SparseBox3DTarget(object):
 
         indices = []
         for i in range(bs):
-            cost = (cls_cost[i] + box_cost[i]).detach().cpu().numpy()
-            cost = np.where(np.isneginf(cost) | np.isnan(cost), 1e8, cost)
-            indices.append(
-                [
-                    cls_pred.new_tensor(x, dtype=torch.int64)
-                    for x in linear_sum_assignment(cost)
-                ]
-            )
+            if cls_cost[i] is not None and box_cost[i] is not None:
+                cost = (cls_cost[i] + box_cost[i]).detach().cpu().numpy()
+                cost = np.where(np.isneginf(cost) | np.isnan(cost), 1e8, cost)
+                indices.append(
+                    [
+                        cls_pred.new_tensor(x, dtype=torch.int64)
+                        for x in linear_sum_assignment(cost)
+                    ]
+                )
+            else:
+                indices.append([None, None])
 
-        output_cls_target = cls_target[0].new_ones([bs, num_pred]) * num_cls
+        output_cls_target = cls_target[0].new_ones([bs, num_pred], dtype=torch.long) * num_cls
         output_box_target = box_pred.new_zeros(box_pred.shape)
         output_reg_weights = box_pred.new_zeros(box_pred.shape)
         for i, (pred_idx, target_idx) in enumerate(indices):
@@ -114,33 +116,39 @@ class SparseBox3DTarget(object):
         cls_pred = cls_pred.sigmoid()
         cost = []
         for i in range(bs):
-            neg_cost = (
-                -(1 - cls_pred[i] + self.eps).log()
-                * (1 - self.alpha)
-                * cls_pred[i].pow(self.gamma)
-            )
-            pos_cost = (
-                -(cls_pred[i] + self.eps).log()
-                * self.alpha
-                * (1 - cls_pred[i]).pow(self.gamma)
-            )
-            cost.append(
-                (pos_cost[:, cls_target[i]] - neg_cost[:, cls_target[i]])
-                * self.cls_weight
-            )
+            if len(cls_target[i]) > 0:
+                neg_cost = (
+                    -(1 - cls_pred[i] + self.eps).log()
+                    * (1 - self.alpha)
+                    * cls_pred[i].pow(self.gamma)
+                )
+                pos_cost = (
+                    -(cls_pred[i] + self.eps).log()
+                    * self.alpha
+                    * (1 - cls_pred[i]).pow(self.gamma)
+                )
+                cost.append(
+                    (pos_cost[:, cls_target[i]] - neg_cost[:, cls_target[i]])
+                    * self.cls_weight
+                )
+            else:
+                cost.append(None)
         return cost
 
     def _box_cost(self, box_pred, box_target, instance_reg_weights):
         bs = box_pred.shape[0]
         cost = []
         for i in range(bs):
-            cost.append(
-                torch.sum(
-                    torch.abs(box_pred[i, :, None] - box_target[i][None])
-                    * instance_reg_weights[i][None]
-                    * box_pred.new_tensor(self.reg_weights),
-                    dim=-1,
+            if len(box_target[i]) > 0:
+                cost.append(
+                    torch.sum(
+                        torch.abs(box_pred[i, :, None] - box_target[i][None])
+                        * instance_reg_weights[i][None]
+                        * box_pred.new_tensor(self.reg_weights),
+                        dim=-1,
+                    )
+                    * self.box_weight
                 )
-                * self.box_weight
-            )
+            else:
+                cost.append(None)
         return cost

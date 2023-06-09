@@ -7,12 +7,12 @@ max_queue_length = H - 1
 
 model = dict(
     head=dict(
-        max_queue_length=max_queue_length,
         deformable_model=dict(
             temporal_fusion_module=dict(
                 type="LinearFusionModule",
             )
         ),
+        instance_bank=dict(max_queue_length=max_queue_length),
     )
 )
 

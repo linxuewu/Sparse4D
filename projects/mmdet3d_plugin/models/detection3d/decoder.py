@@ -5,8 +5,8 @@ import torch
 
 from mmdet.core.bbox.builder import BBOX_CODERS
 
-X, Y, Z, W, L, H, SIN_Y, COS_Y, VX, VY, VZ = list(range(11))
-
+X, Y, Z, W, L, H, SIN_YAW, COS_YAW, VX, VY, VZ = list(range(11))
+YAW = 6
 
 @BBOX_CODERS.register_module()
 class SparseBox3DDecoder(object):
@@ -39,7 +39,7 @@ class SparseBox3DDecoder(object):
                 scores = scores[mask[i]]
                 box = box[mask[i]]
 
-            yaw = torch.atan2(box[:, SIN_Y], box[:, COS_Y])
+            yaw = torch.atan2(box[:, SIN_YAW], box[:, COS_YAW])
             box = torch.cat(
                 [
                     box[:, [X, Y, Z]],

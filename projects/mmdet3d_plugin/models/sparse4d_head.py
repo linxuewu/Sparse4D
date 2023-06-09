@@ -1,5 +1,6 @@
 # Copyright (c) Horizon Robotics. All rights reserved.
 from typing import List, Optional, Tuple, Union
+import warnings
 
 import numpy as np
 import torch
@@ -14,9 +15,10 @@ from mmcv.cnn.bricks.registry import (
 )
 from mmcv.runner import BaseModule, force_fp32
 from mmcv.utils import build_from_cfg
-from mmdet.models import HEADS, build_loss
+from mmdet.core.bbox.builder import BBOX_SAMPLERS
+from mmdet.core.bbox.builder import BBOX_CODERS
+from mmdet.models import HEADS, LOSSES
 from mmdet.core import reduce_mean
-from mmdet.core.bbox.builder import build_bbox_coder, build_sampler
 
 from .blocks import DeformableFeatureAggregation as DFG
 
@@ -27,17 +29,18 @@ __all__ = ["Sparse4DHead"]
 class Sparse4DHead(BaseModule):
     def __init__(
         self,
-        num_anchor: int,
-        anchor_file: str,
-        num_decoder: int,
-        embed_dims: int,
+        instance_bank: dict,
         anchor_encoder: dict,
         graph_model: dict,
         norm_layer: dict,
         ffn: dict,
         deformable_model: dict,
         refine_layer: dict,
+        num_decoder: int = 6,
+        num_single_frame_decoder: int = -1,
+        temp_graph_model: dict = None,
         depth_module: dict = None,
+        dense_depth_module: dict = None,
         loss_cls: dict = None,
         loss_reg: dict = None,
         decoder: dict = None,
@@ -46,27 +49,24 @@ class Sparse4DHead(BaseModule):
         gt_reg_key: str = "boxes",
         reg_weights=None,
         operation_order: Optional[List[str]] = None,
-        pre_norm=False,
         kps_generator=None,
-        default_time_interval=0.5,
         max_queue_length=0,
         cls_threshold_to_reg=-1,
         init_cfg=None,
         **kwargs,
     ):
         super(Sparse4DHead, self).__init__(init_cfg)
-        self.num_anchor = num_anchor
         self.num_decoder = num_decoder
-        self.embed_dims = embed_dims
+        self.num_single_frame_decoder = num_single_frame_decoder
         self.gt_cls_key = gt_cls_key
         self.gt_reg_key = gt_reg_key
-        self.default_time_interval = default_time_interval
         self.max_queue_length = max_queue_length
         self.cls_threshold_to_reg = cls_threshold_to_reg
         if reg_weights is None:
             self.reg_weights = [1.0] * 10
         else:
             self.reg_weights = reg_weights
+
         if operation_order is None:
             operation_order = [
                 "gnn",
@@ -76,66 +76,38 @@ class Sparse4DHead(BaseModule):
                 "ffn",
                 "norm",
                 "refine",
-            ]
-        else:
-            assert set(operation_order) == set(
-                [
-                    "gnn",
-                    "norm",
-                    "deformable",
-                    "ffn",
-                    "refine",
-                    "identity",
-                    "add",
-                ]
-            )
-        self.operation_order = operation_order * num_decoder
-        if pre_norm:
-            self.pre_norm = nn.LayerNorm(embed_dims)
-        else:
-            self.pre_norm = None
+            ] * num_decoder
+        self.operation_order = operation_order
+
+        # =========== build modules ===========
+        def build(cfg, registry):
+            if cfg is None:
+                return None
+            return build_from_cfg(cfg, registry)
+
+        self.instance_bank = build(instance_bank, PLUGIN_LAYERS)
+        self.anchor_encoder = build(anchor_encoder, POSITIONAL_ENCODING)
+        self.depth_module = build(depth_module, PLUGIN_LAYERS)
+        self.dense_depth_module = build(dense_depth_module, PLUGIN_LAYERS)
+        self.kps_generator = build(kps_generator, PLUGIN_LAYERS)
+        self.sampler = build(sampler, BBOX_SAMPLERS)
+        self.decoder = build(decoder, BBOX_CODERS)
+        self.loss_cls = build(loss_cls, LOSSES)
+        self.loss_reg = build(loss_reg, LOSSES)
         self.op_config_map = {
+            "temp_gnn": [temp_graph_model, ATTENTION],
             "gnn": [graph_model, ATTENTION],
             "norm": [norm_layer, NORM_LAYERS],
             "ffn": [ffn, FEEDFORWARD_NETWORK],
             "deformable": [deformable_model, ATTENTION],
             "refine": [refine_layer, PLUGIN_LAYERS],
         }
-
-        self.anchor_encoder = build_from_cfg(
-            anchor_encoder, POSITIONAL_ENCODING
-        )
         self.layers = nn.ModuleList(
             [
-                build_from_cfg(*self.op_config_map[op])
-                if op in self.op_config_map else None
+                build(*self.op_config_map.get(op, [None, None]))
                 for op in self.operation_order
             ]
         )
-        anchor = np.load(anchor_file)[:self.num_anchor]
-        self.anchor = nn.Parameter(
-            torch.tensor(anchor, dtype=torch.float32), requires_grad=True
-        )
-        self.anchor_init = anchor
-        self.instance_feature = nn.Embedding(self.num_anchor, self.embed_dims)
-        if depth_module is not None:
-            self.depth_module = build_from_cfg(depth_module, PLUGIN_LAYERS)
-        else:
-            self.depth_module = None
-        if sampler is not None:
-            self.sampler = build_sampler(sampler)
-        if decoder is not None:
-            self.decoder = build_bbox_coder(decoder)
-        if loss_cls is not None:
-            self.loss_cls = build_loss(loss_cls)
-        if loss_reg is not None:
-            self.loss_reg = build_loss(loss_reg)
-        if kps_generator is not None:
-            self.kps_generator = build_from_cfg(kps_generator, PLUGIN_LAYERS)
-        else:
-            self.kps_generator = None
-        self.feature_queue = [] if max_queue_length > 0 else None
-        self.meta_queue = [] if max_queue_length > 0 else None
 
     def init_weights(self):
         for i, op in enumerate(self.operation_order):
@@ -148,7 +120,6 @@ class Sparse4DHead(BaseModule):
         for m in self.modules():
             if hasattr(m, "init_weight"):
                 m.init_weight()
-        self.anchor.data = self.anchor.data.new_tensor(self.anchor_init)
 
     def forward(
         self,
@@ -160,34 +131,40 @@ class Sparse4DHead(BaseModule):
         if isinstance(feature_maps, torch.Tensor):
             feature_maps = [feature_maps]
         batch_size = feature_maps[0].shape[0]
-        instance_feature = torch.tile(
-            self.instance_feature.weight[None], (batch_size, 1, 1)
-        )
-        anchor = torch.tile(self.anchor[None], (batch_size, 1, 1))
+        (
+            instance_feature,
+            anchor,
+            temp_instance_feature,
+            temp_anchor,
+            time_interval,
+        ) = self.instance_bank.get(batch_size, metas)
         anchor_embed = self.anchor_encoder(anchor)
-        if self.pre_norm is not None:
-            instance_feature = self.pre_norm(instance_feature)
+        if temp_anchor is not None:
+            temp_anchor_embed = self.anchor_encoder(temp_anchor)
+        else:
+            temp_anchor_embed = None
 
-        if not self.training:
-            feature_queue = self.feature_queue
-            meta_queue = self.meta_queue
+        _feature_queue = self.instance_bank.feature_queue
+        _meta_queue = self.instance_bank.meta_queue
+        if feature_queue is not None and _feature_queue is not None:
+            feature_queue = feature_queue + _feature_queue
+            meta_queue = meta_queue + _meta_queue
+        elif feature_queue is None:
+            feature_queue = _feature_queue
+            meta_queue = _meta_queue
 
         prediction = []
         classification = []
-        if meta_queue is not None and len(meta_queue) > 0:
-            time_interval = metas["timestamp"] - meta_queue[0]["timestamp"]
-            time_interval = time_interval.to(dtype=instance_feature.dtype)
-            time_interval = torch.where(
-                time_interval == 0,
-                time_interval.new_tensor(self.default_time_interval),
-                time_interval,
-            )
-        else:
-            time_interval = instance_feature.new_tensor(
-                [self.default_time_interval] * len(instance_feature)
-            )
         for i, op in enumerate(self.operation_order):
-            if op == "gnn":
+            if op == "temp_gnn":
+                instance_feature = self.layers[i](
+                    instance_feature,
+                    temp_instance_feature,
+                    temp_instance_feature,
+                    query_pos=anchor_embed,
+                    key_pos=temp_anchor_embed,
+                )
+            elif op == "gnn":
                 instance_feature = self.layers[i](
                     instance_feature,
                     query_pos=anchor_embed,
@@ -211,33 +188,41 @@ class Sparse4DHead(BaseModule):
                     anchor_encoder=self.anchor_encoder,
                 )
             elif op == "refine":
-                anchor = self.layers[i](
+                anchor, cls = self.layers[i](
                     instance_feature,
                     anchor,
                     anchor_embed,
                     time_interval=time_interval,
+                    return_cls=(
+                        self.training
+                        or len(prediction) == self.num_single_frame_decoder - 1
+                        or i == len(self.operation_order) - 1
+                    ),
                 )
-                if i != len(self.operation_order) - 1:
-                    anchor_embed = self.anchor_encoder(anchor)
-                    if self.training:
-                        cls = self.layers[i].cls_forward(instance_feature)
-                    else:
-                        cls = None
-                else:
-                    cls = self.layers[i].cls_forward(instance_feature)
                 prediction.append(anchor)
                 classification.append(cls)
+                if len(prediction) == self.num_single_frame_decoder:
+                    instance_feature, anchor = self.instance_bank.update(
+                        instance_feature, anchor, cls
+                    )
+                if i != len(self.operation_order) - 1:
+                    anchor_embed = self.anchor_encoder(anchor)
+                if (
+                    len(prediction) > self.num_single_frame_decoder
+                    and temp_anchor_embed is not None
+                ):
+                    temp_anchor_embed = anchor_embed[
+                        :, : self.instance_bank.num_temp_instances
+                    ]
+            else:
+                raise NotImplementedError(f"{op} is not supported.")
 
-        if not self.training and feature_queue is not None:
-            self.feature_queue.insert(0, feature_maps)
-            self.meta_queue.insert(0, metas)
-            while len(self.feature_queue) > self.max_queue_length:
-                self.feature_queue.pop()
-                self.meta_queue.pop()
-
+        self.instance_bank.cache(
+            instance_feature, anchor, cls, metas, feature_maps
+        )
         return classification, prediction
 
-    @force_fp32(apply_to=('cls_scores', 'reg_preds'))
+    @force_fp32(apply_to=("cls_scores", "reg_preds"))
     def loss(self, cls_scores, reg_preds, data, feature_maps=None):
         output = {}
         for decoder_idx, (cls, reg) in enumerate(zip(cls_scores, reg_preds)):
@@ -250,7 +235,8 @@ class Sparse4DHead(BaseModule):
             )
             reg_target = reg_target[..., : len(self.reg_weights)]
             mask = torch.logical_not(torch.all(reg_target == 0, dim=-1))
-            
+            mask_valid = mask.clone()
+
             num_pos = max(
                 reduce_mean(torch.sum(mask).to(dtype=reg.dtype)), 1.0
             )
@@ -293,13 +279,15 @@ class Sparse4DHead(BaseModule):
             )
             loss_depth = []
             for i in range(len(reg_target)):
+                if len(reg_target[i]) == 0:
+                    continue
                 key_points = self.kps_generator(reg_target[i][None])
                 features = (
                     DFG.feature_sampling(
                         [f[i : i + 1] for f in feature_maps],
                         key_points,
-                        data["projection_mat"][i:i+1],
-                        data["image_wh"][i:i+1],
+                        data["projection_mat"][i : i + 1],
+                        data["image_wh"][i : i + 1],
                     )
                     .mean(2)
                     .mean(2)
@@ -311,8 +299,15 @@ class Sparse4DHead(BaseModule):
             output["loss_depth"] = (
                 sum(loss_depth) / num_pos / self.kps_generator.num_pts
             )
+
+        if self.dense_depth_module is not None:
+            output["loss_dense_depth"] = self.dense_depth_module(
+                feature_maps,
+                focal=data.get("focal"),
+                gt_depths=data["gt_depth"],
+            )
         return output
 
-    @force_fp32(apply_to=('cls_scores', 'reg_preds'))
+    @force_fp32(apply_to=("cls_scores", "reg_preds"))
     def post_process(self, cls_scores, reg_preds):
         return self.decoder.decode(cls_scores, reg_preds)
