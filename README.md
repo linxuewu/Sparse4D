@@ -28,6 +28,7 @@ These experiments were conducted using 8 RTX 3090 GPUs with 24 GB memory.
  Install requirements.
 ```shell
 pip install -r requirements.txt
+cd projects/mmdet3d_plugin/ops
 python setup.py develop
 ```
 

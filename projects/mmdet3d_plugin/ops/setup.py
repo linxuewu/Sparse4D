@@ -49,7 +49,7 @@ if __name__ == "__main__":
         ext_modules=[
             make_cuda_ext(
                 "deformable_aggregation_ext",
-                module="hat.models.task_modules.sparse4d.ops",
+                module=".",
                 sources=[
                     f"src/deformable_aggregation.cpp",
                     f"src/deformable_aggregation_cuda.cu",
