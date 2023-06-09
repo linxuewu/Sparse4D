@@ -18,10 +18,12 @@ then
         ${config} \
         ${checkpoint} \
         ${gpu_num} \
-        --eval bbox
+        --eval bbox \
+        $@
 else
     python ./tools/test.py \
         ${config} \
         ${checkpoint} \
-        --eval bbox
+        --eval bbox \
+        $@
 fi

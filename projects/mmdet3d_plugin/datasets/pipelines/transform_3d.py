@@ -9,6 +9,93 @@ from PIL import Image
 
 
 @PIPELINES.register_module()
+class ImagePositionEmbeding(object):
+    def __init__(self, stride, patch_size=2, distance=None):
+        self.stride = stride
+        self.patch_size = patch_size
+        self.distance = distance if distance is not None else np.linspace(0.5, 60, 10)
+        self.num_points = len(self.distance)
+
+    def __call__(self, input_dict):
+        img_pos_embed = []
+        num_cams = len(input_dict["lidar2img"])
+        for i, lidar2img in enumerate(input_dict["lidar2img"]):
+            H, W = input_dict["img_shape"][i][:2]
+            h, w = H // self.stride, W // self.stride
+            pe = np.indices([w, h]).transpose(2, 1, 0) * self.stride
+            pe = np.concatenate([pe, np.ones_like(pe[..., :1])], axis=-1)
+            pe = pe[:, :, None] * self.distance[:, None]
+
+            img2lidar = np.linalg.inv(lidar2img)
+            pe = pe @ img2lidar[:3, :3].T + img2lidar[:3, 3]
+            
+            pe = pe.reshape(
+                h // self.patch_size,
+                self.patch_size,
+                w // self.patch_size,
+                self.patch_size,
+                self.num_points,
+                3
+            ).transpose(0, 2, 1, 3, 4, 5).reshape(
+                h // self.patch_size * (w // self.patch_size), -1, 3
+            )
+            img_pos_embed.append(pe)
+        input_dict["img_pos_state"] = np.float32(np.stack(img_pos_embed))
+        return input_dict
+
+
+@PIPELINES.register_module()
+class MultiScaleDepthMapGenerator(object):
+    def __init__(self, downsample=1, max_depth=60):
+        if not isinstance(downsample, (list, tuple)):
+            downsample = [downsample]
+        self.downsample = downsample
+        self.max_depth = max_depth
+
+    def __call__(self, input_dict):
+        points = input_dict["points"].tensor[..., :3, None].cpu().numpy()
+
+        gt_depth = []
+        for i, lidar2img in enumerate(input_dict["lidar2img"]):
+            H, W = input_dict["img_shape"][i][:2]
+
+            pts_2d = (
+                np.squeeze(lidar2img[:3, :3] @ points, axis=-1)
+                + lidar2img[:3, 3]
+            )
+            pts_2d[:, :2] /= pts_2d[:, 2:3]
+            U = np.round(pts_2d[:, 0]).astype(np.int32)
+            V = np.round(pts_2d[:, 1]).astype(np.int32)
+            depths = pts_2d[:, 2]
+            mask = np.logical_and.reduce(
+                [
+                    V >= 0,
+                    V < H,
+                    U >= 0,
+                    U < W,
+                    depths >= 0.1,
+                    depths <= self.max_depth,
+                ]
+            )
+            V, U, depths = V[mask], U[mask], depths[mask]
+            sort_idx = np.argsort(depths)[::-1]
+            V, U, depths = V[sort_idx], U[sort_idx], depths[sort_idx]
+
+            for j, downsample in enumerate(self.downsample):
+                if len(gt_depth) < j + 1:
+                    gt_depth.append([])
+                h, w = (int(H / downsample), int(W / downsample))
+                u = np.floor(U / downsample).astype(np.int32)
+                v = np.floor(V / downsample).astype(np.int32)
+                depth_map = np.ones([h, w], dtype=np.float32) * -1
+                depth_map[v, u] = depths
+                gt_depth[j].append(depth_map)
+
+        input_dict["gt_depth"] = [np.stack(x) for x in gt_depth]
+        return input_dict
+
+
+@PIPELINES.register_module()
 class NuScenesSparse4DAdaptor(object):
     def __init(self):
         pass
@@ -22,6 +109,11 @@ class NuScenesSparse4DAdaptor(object):
         )
         input_dict["T_global_inv"] = np.linalg.inv(input_dict["lidar2global"])
         input_dict["T_global"] = input_dict["lidar2global"]
+        if "cam_intrinsic" in input_dict:
+            input_dict["cam_intrinsic"] = np.float32(
+                np.stack(input_dict["cam_intrinsic"])
+            )
+            input_dict["focal"] = input_dict["cam_intrinsic"][..., 0, 0]
         return input_dict
 
 
@@ -116,27 +208,15 @@ class InstanceRangeFilter(object):
 
 
 @PIPELINES.register_module()
-class ResizeCropFlipImage_petr(object):
-    """Random resize, Crop and flip the image
-    Args:
-        size (tuple, optional): Fixed padding size.
-    """
-
-    def __init__(self):
-        pass
-
+class ResizeCropFlipImage(object):
     def __call__(self, results):
-        """Call function to pad images, masks, semantic segmentation maps.
-        Args:
-            results (dict): Result dict from loading pipeline.
-        Returns:
-            dict: Updated result dict.
-        """
-
+        aug_configs = results.get("aug_configs")
+        if aug_configs is None:
+            return results
+        resize, resize_dims, crop, flip, rotate = aug_configs
         imgs = results["img"]
         N = len(imgs)
         new_imgs = []
-        resize, resize_dims, crop, flip, rotate = results["aug_configs"]
         for i in range(N):
             img = Image.fromarray(np.uint8(imgs[i]))
             img, ida_mat = self._img_transform(
@@ -147,10 +227,12 @@ class ResizeCropFlipImage_petr(object):
                 flip=flip,
                 rotate=rotate,
             )
+            mat = np.eye(4)
+            mat[:3, :3] = ida_mat
             new_imgs.append(np.array(img).astype(np.float32))
-            results["lidar2img"][i][:3, :3] = (
-                ida_mat @ results["lidar2img"][i][:3, :3]
-            )
+            results["lidar2img"][i] = mat @ results["lidar2img"][i]
+            if "cam_intrinsic" in results:
+                results["cam_intrinsic"][i][:3, :3] *= resize
 
         results["img"] = new_imgs
         results["img_shape"] = [x.shape[:2] for x in new_imgs]
@@ -194,57 +276,13 @@ class ResizeCropFlipImage_petr(object):
 
 
 @PIPELINES.register_module()
-class GlobalRotScaleTransImage(object):
-    """Random resize, Crop and flip the image
-    Args:
-        size (tuple, optional): Fixed padding size.
-    """
-
-    def __init__(
-        self,
-        rot_range=[-0.3925, 0.3925],
-        scale_ratio_range=[0.95, 1.05],
-        translation_std=[0, 0, 0],
-        reverse_angle=False,
-        training=True,
-    ):
-
-        self.rot_range = rot_range
-        self.scale_ratio_range = scale_ratio_range
-        self.translation_std = translation_std
-
-        self.reverse_angle = reverse_angle
-        self.training = training
-
+class BBoxRotation(object):
     def __call__(self, results):
-        """Call function to pad images, masks, semantic segmentation maps.
-        Args:
-            results (dict): Result dict from loading pipeline.
-        Returns:
-            dict: Updated result dict.
-        """
-        # random rotate
-        rot_angle = results["rot_angle"]
+        angle = results["rot_angle"]
+        rot_cos = np.cos(angle)
+        rot_sin = np.sin(angle)
 
-        self.rotate_bev_along_z(results, rot_angle)
-        if self.reverse_angle:
-            rot_angle = rot_angle * -1
-        results["gt_bboxes_3d"].rotate(np.array(rot_angle))
-
-        # random scale
-        scale_ratio = results["scale_ratio"]
-        self.scale_xyz(results, scale_ratio)
-        results["gt_bboxes_3d"].scale(scale_ratio)
-
-        # TODO: support translation
-
-        return results
-
-    def rotate_bev_along_z(self, results, angle):
-        rot_cos = torch.cos(torch.tensor(angle))
-        rot_sin = torch.sin(torch.tensor(angle))
-
-        rot_mat = torch.tensor(
+        rot_mat = np.array(
             [
                 [rot_cos, -rot_sin, 0, 0],
                 [rot_sin, rot_cos, 0, 0],
@@ -252,45 +290,17 @@ class GlobalRotScaleTransImage(object):
                 [0, 0, 0, 1],
             ]
         )
-        rot_mat_inv = torch.inverse(rot_mat)
+        rot_mat_inv = np.linalg.inv(rot_mat)
 
         num_view = len(results["lidar2img"])
         for view in range(num_view):
             results["lidar2img"][view] = (
-                torch.tensor(results["lidar2img"][view]).float() @ rot_mat_inv
-            ).numpy()
-            if "extrinsics" in results:
-                results["extrinsics"][view] = (
-                    torch.tensor(results["extrinsics"][view]).float()
-                    @ rot_mat_inv
-                ).numpy()
-
-        return
-
-    def scale_xyz(self, results, scale_ratio):
-        rot_mat = torch.tensor(
-            [
-                [scale_ratio, 0, 0, 0],
-                [0, scale_ratio, 0, 0],
-                [0, 0, scale_ratio, 0],
-                [0, 0, 0, 1],
-            ]
-        )
-
-        rot_mat_inv = torch.inverse(rot_mat)
-
-        num_view = len(results["lidar2img"])
-        for view in range(num_view):
-            results["lidar2img"][view] = (
-                torch.tensor(results["lidar2img"][view]).float() @ rot_mat_inv
-            ).numpy()
-            if "extrinsics" in results:
-                results["extrinsics"][view] = (
-                    torch.tensor(results["extrinsics"][view]).float()
-                    @ rot_mat_inv
-                ).numpy()
-
-        return
+                results["lidar2img"][view] @ rot_mat_inv
+            )
+        if "lidar2global" in results:
+            results["lidar2global"] = results["lidar2global"] @ rot_mat_inv
+        results["ann_info"]["gt_bboxes_3d"].rotate(np.array(angle))
+        return results
 
 
 @PIPELINES.register_module()
@@ -577,9 +587,7 @@ class CustomCropMultiViewImage(object):
 
 @PIPELINES.register_module()
 class CustomResizeMultiViewImage(object):
-    def __init__(
-        self, shape=None, scale=None
-    ):
+    def __init__(self, shape=None, scale=None):
         self.shape = shape
         if isinstance(scale, (tuple, list)):
             self.scale = scale

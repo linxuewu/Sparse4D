@@ -68,6 +68,10 @@ def custom_train_detector(
             )
         cfg.data.samples_per_gpu = cfg.data.imgs_per_gpu
 
+    if "runner" in cfg:
+        runner_type = cfg.runner["type"]
+    else:
+        runner_type = "EpochBasedRunner"
     data_loaders = [
         build_dataloader(
             ds,
@@ -80,6 +84,7 @@ def custom_train_detector(
             nonshuffler_sampler=dict(
                 type="DistributedSampler"
             ),  # dict(type='DistributedSampler'),
+            runner_type=runner_type,
         )
         for ds in dataset
     ]

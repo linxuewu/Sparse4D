@@ -1,5 +1,6 @@
 import torch
 import random
+import math
 import os
 from os import path as osp
 import cv2
@@ -127,10 +128,13 @@ class NuScenes3DDetTrackDataset(Custom3DDataset):
         fix_interval=True,
         future_frame=0,
         rot_range=[-0.3925, 0.3925],
-        scale_ratio_range=[0.95, 1.05],
+        scale_ratio_range=[1.0, 1.0],
         translation_std=[0, 0, 0],
         data_aug_conf=None,
         tracking=False,
+        sequences_split_num=1,
+        with_seq_flag=False,
+        keep_consistent_seq_aug=True,
     ):
         self.version = version
         self.load_interval = load_interval
@@ -173,8 +177,66 @@ class NuScenes3DDetTrackDataset(Custom3DDataset):
         self.scale_ratio_range = scale_ratio_range
         self.translation_std = translation_std
         self.data_aug_conf = data_aug_conf
-
         self.tracking = tracking
+        self.sequences_split_num = sequences_split_num
+        self.keep_consistent_seq_aug = keep_consistent_seq_aug
+        self.current_aug = None
+        self.last_id = None
+        if with_seq_flag:
+            self._set_sequence_group_flag()
+
+    def _set_sequence_group_flag(self):
+        """
+        Set each sequence to be a different group
+        """
+        res = []
+
+        curr_sequence = 0
+        for idx in range(len(self.data_infos)):
+            if idx != 0 and len(self.data_infos[idx]["sweeps"]) == 0:
+                # Not first frame and # of sweeps is 0 -> new sequence
+                curr_sequence += 1
+            res.append(curr_sequence)
+
+        self.flag = np.array(res, dtype=np.int64)
+
+        if self.sequences_split_num != 1:
+            if self.sequences_split_num == "all":
+                self.flag = np.array(
+                    range(len(self.data_infos)), dtype=np.int64
+                )
+            else:
+                bin_counts = np.bincount(self.flag)
+                new_flags = []
+                curr_new_flag = 0
+                for curr_flag in range(len(bin_counts)):
+                    curr_sequence_length = np.array(
+                        list(
+                            range(
+                                0,
+                                bin_counts[curr_flag],
+                                math.ceil(
+                                    bin_counts[curr_flag]
+                                    / self.sequences_split_num
+                                ),
+                            )
+                        )
+                        + [bin_counts[curr_flag]]
+                    )
+
+                    for sub_seq_idx in (
+                        curr_sequence_length[1:] - curr_sequence_length[:-1]
+                    ):
+                        for _ in range(sub_seq_idx):
+                            new_flags.append(curr_new_flag)
+                        curr_new_flag += 1
+
+                assert len(new_flags) == len(self.flag)
+                assert (
+                    len(np.bincount(new_flags))
+                    == len(np.bincount(self.flag)) * self.sequences_split_num
+                )
+                self.flag = np.array(new_flags, dtype=np.int64)
 
     def _sample_augmentation(self):
         H, W = self.data_aug_conf["H"], self.data_aug_conf["W"]
@@ -288,12 +350,32 @@ class NuScenes3DDetTrackDataset(Custom3DDataset):
         return example, rot_angle, scale_ratio, aug_configs
 
     def __getitem__(self, idx):
-        data, rot_angle, scale_ratio, aug_configs = self._getitem(idx)
+        if isinstance(idx, dict):
+            rot_angle, scale_ratio, aug_configs = idx["aug"]
+            idx = idx["idx"]
+            data = self._getitem(idx, rot_angle, scale_ratio, aug_configs)[0]
+        else:
+            data, rot_angle, scale_ratio, aug_configs = self._getitem(idx)
+        # if (
+        #     not self.keep_consistent_seq_aug
+        #     or idx == 0
+        #     or self.flag[idx] != self.flag[idx - 1]
+        #     or self.current_aug is None
+        # ):
+        #     data, rot_angle, scale_ratio, aug_configs = self._getitem(idx)
+        #     self.current_aug = rot_angle, scale_ratio, aug_configs
+        # else:
+        #     data = self._getitem(idx, *self.current_aug)[0]
+        #     rot_angle, scale_ratio, aug_configs = self.current_aug
+
         if isinstance(data["img_metas"], list):
             cur_timestamp = data["img_metas"][0].data["timestamp"]
         else:
             cur_timestamp = data["img_metas"].data["timestamp"]
 
+        interval = (
+            int(random.random() * self.max_interval) + self.min_interval
+        )
         if self.seq_frame > 0 and not self.test_mode:
             seq_frame_indice = []
             seq_frame_num = self.seq_frame
@@ -307,9 +389,6 @@ class NuScenes3DDetTrackDataset(Custom3DDataset):
                 )
 
             idx_next = idx
-            interval = (
-                int(random.random() * self.max_interval) + self.min_interval
-            )
             for i in range(seq_frame_num):
                 if idx_next == 0:
                     break
@@ -358,7 +437,7 @@ class NuScenes3DDetTrackDataset(Custom3DDataset):
 
         if self.future_frame > 0:
             idx_next = idx
-            future_data_list = []
+            future_data_queue = []
             if self.test_mode:
                 interval = 1
             for i in range(self.future_frame):
@@ -382,8 +461,8 @@ class NuScenes3DDetTrackDataset(Custom3DDataset):
                     seq_timestamp = future_data["img_metas"].data["timestamp"]
                 if abs(seq_timestamp - cur_timestamp) > self.max_time_interval:
                     break
-                future_data_list.append(future_data)
-            data["future_data_list"] = future_data_list
+                future_data_queue.append(future_data)
+            data["future_data_queue"] = future_data_queue
         return data
 
     def get_cat_ids(self, idx):
@@ -437,6 +516,7 @@ class NuScenes3DDetTrackDataset(Custom3DDataset):
         if self.modality["use_camera"]:
             image_paths = []
             lidar2img_rts = []
+            cam_intrinsic = []
             for cam_type, cam_info in info["cams"].items():
                 image_paths.append(cam_info["data_path"])
                 # obtain lidar to image transformation matrix
@@ -448,6 +528,7 @@ class NuScenes3DDetTrackDataset(Custom3DDataset):
                 lidar2cam_rt[:3, :3] = lidar2cam_r.T
                 lidar2cam_rt[3, :3] = -lidar2cam_t
                 intrinsic = cam_info["cam_intrinsic"]
+                cam_intrinsic.append(intrinsic)
                 viewpad = np.eye(4)
                 viewpad[: intrinsic.shape[0], : intrinsic.shape[1]] = intrinsic
                 lidar2img_rt = viewpad @ lidar2cam_rt.T
@@ -457,6 +538,7 @@ class NuScenes3DDetTrackDataset(Custom3DDataset):
                 dict(
                     img_filename=image_paths,
                     lidar2img=lidar2img_rts,
+                    cam_intrinsic=cam_intrinsic,
                 )
             )
 
@@ -773,8 +855,7 @@ class NuScenes3DDetTrackDataset(Custom3DDataset):
             data_info = pipeline(self.get_data_info(i))
             imgs = []
             raw_imgs = [
-                x.permute(1, 2, 0).cpu().numpy()
-                for x in data_info["img"].data
+                x.permute(1, 2, 0).cpu().numpy() for x in data_info["img"].data
             ]
             lidar2img = data_info["img_metas"].data["lidar2img"]
             # gt_bboxes_3d = self.get_ann_info(i)['gt_bboxes_3d']

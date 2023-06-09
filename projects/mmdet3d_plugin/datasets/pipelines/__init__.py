@@ -1,8 +1,8 @@
 from .transform_3d import (
     InstanceNameFilter,
     InstanceRangeFilter,
-    ResizeCropFlipImage_petr,
-    GlobalRotScaleTransImage,
+    ResizeCropFlipImage,
+    BBoxRotation,
     CircleObjectRangeFilter,
     PadMultiViewImage,
     NormalizeMultiviewImage,
@@ -14,8 +14,8 @@ from .transform_3d import (
 __all__ = [
    "InstanceNameFilter",
    "InstanceRangeFilter",
-   "ResizeCropFlipImage_petr",
-   "GlobalRotScaleTransImage",
+   "ResizeCropFlipImage",
+   "BBoxRotation",
    "CircleObjectRangeFilter",
    "PadMultiViewImage",
    "NormalizeMultiviewImage",

@@ -1,4 +1,3 @@
-# Copyright (c) OpenMMLab. All rights reserved.
 import copy
 import platform
 import random
@@ -11,13 +10,12 @@ from mmcv.utils import Registry, build_from_cfg
 from torch.utils.data import DataLoader
 
 from mmdet.datasets.samplers import GroupSampler
-from projects.mmdet3d_plugin.datasets.samplers.group_sampler import (
+from projects.mmdet3d_plugin.datasets.samplers import (
+    InfiniteGroupEachSampleInBatchSampler,
     DistributedGroupSampler,
-)
-from projects.mmdet3d_plugin.datasets.samplers.distributed_sampler import (
     DistributedSampler,
+    build_sampler
 )
-from projects.mmdet3d_plugin.datasets.samplers.sampler import build_sampler
 
 
 def build_dataloader(
@@ -30,6 +28,7 @@ def build_dataloader(
     seed=None,
     shuffler_sampler=None,
     nonshuffler_sampler=None,
+    runner_type="EpochBasedRunner",
     **kwargs
 ):
     """Build PyTorch DataLoader.
@@ -50,10 +49,24 @@ def build_dataloader(
         DataLoader: A PyTorch dataloader.
     """
     rank, world_size = get_dist_info()
-    if dist:
+    batch_sampler = None
+    if runner_type == 'IterBasedRunner':
+        print("Use InfiniteGroupEachSampleInBatchSampler !!!")
+        batch_sampler = InfiniteGroupEachSampleInBatchSampler(
+            dataset,
+            samples_per_gpu,
+            world_size,
+            rank,
+            seed=seed,
+        )
+        batch_size = 1
+        sampler = None
+        num_workers = workers_per_gpu
+    elif dist:
         # DistributedGroupSampler will definitely shuffle the data to satisfy
         # that images on each GPU are in the same group
         if shuffle:
+            print("Use DistributedGroupSampler !!!")
             sampler = build_sampler(
                 shuffler_sampler
                 if shuffler_sampler is not None
@@ -66,7 +79,6 @@ def build_dataloader(
                     seed=seed,
                 ),
             )
-
         else:
             sampler = build_sampler(
                 nonshuffler_sampler
@@ -100,6 +112,7 @@ def build_dataloader(
         dataset,
         batch_size=batch_size,
         sampler=sampler,
+        batch_sampler=batch_sampler,
         num_workers=num_workers,
         collate_fn=partial(collate, samples_per_gpu=samples_per_gpu),
         pin_memory=False,
