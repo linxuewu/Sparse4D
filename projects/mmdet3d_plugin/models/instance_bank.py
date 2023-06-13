@@ -168,7 +168,7 @@ class InstanceBank(nn.Module):
         metas=None,
         feature_maps=None,
     ):
-        if self.feature_queue is not None:
+        if self.feature_queue is not None and not self.training:
             while len(self.feature_queue) > self.max_queue_length - 1:
                 self.feature_queue.pop()
                 self.meta_queue.pop()
