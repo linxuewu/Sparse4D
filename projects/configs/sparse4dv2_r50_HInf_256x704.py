@@ -114,6 +114,7 @@ model = dict(
             anchor_handler=dict(type="SparseBox3DKeyPointsGenerator"),
             num_temp_instances=600,
             confidence_decay=0.6,
+            feat_grad=False,
         ),
         anchor_encoder=dict(
             type="SparseBox3DEncoder",

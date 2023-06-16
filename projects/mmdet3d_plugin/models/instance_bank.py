@@ -34,6 +34,7 @@ class InstanceBank(nn.Module):
         max_queue_length=-1,
         confidence_decay=0.6,
         anchor_grad=True,
+        feat_grad=True,
         max_time_interval=2,
     ):
         super(InstanceBank, self).__init__()
@@ -60,7 +61,7 @@ class InstanceBank(nn.Module):
         self.anchor_init = anchor
         self.instance_feature = nn.Parameter(
             torch.zeros([self.anchor.shape[0], self.embed_dims]),
-            requires_grad=False,
+            requires_grad=feat_grad,
         )
         self.cached_feature = None
         self.cached_anchor = None
@@ -72,6 +73,8 @@ class InstanceBank(nn.Module):
 
     def init_weight(self):
         self.anchor.data = self.anchor.data.new_tensor(self.anchor_init)
+        if self.instance_feature.requires_grad:
+            torch.nn.init.xavier_uniform_(self.instance_feature.data, gain=1)
 
     def get(self, batch_size, metas=None):
         instance_feature = torch.tile(
