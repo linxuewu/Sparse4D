@@ -4,7 +4,7 @@ nuscenes-devkit==1.1.9
 mmcv==1.4.8
 mmcv-full==1.4.0
 mmdet==2.19.1
-mmdet3d==0.17.2
+mmdet3d==0.17.2  # please use mmdet3d>=1.0.0rc0 for data convert or directly use the pickle file we provide
 mmsegmentation==0.20.2
 motmetrics==1.1.3
 tensorboard==2.6.0
