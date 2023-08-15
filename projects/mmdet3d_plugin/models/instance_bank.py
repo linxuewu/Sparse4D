@@ -129,7 +129,7 @@ class InstanceBank(nn.Module):
             time_interval = time_interval.to(dtype=instance_feature.dtype)
             time_interval = torch.where(
                 torch.logical_or(
-                    time_interval == 0, time_interval > self.max_time_interval
+                    time_interval == 0, torch.abs(time_interval) > self.max_time_interval
                 ),
                 time_interval.new_tensor(self.default_time_interval),
                 time_interval,
