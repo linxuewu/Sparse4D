@@ -1,4 +1,6 @@
 # Sparse4D
+**【2023/11/21】 The paper of [Sparse4Dv3](https://arxiv.org/abs/2311.11722) has been published.**
+
 **Sparse4Dv3 is about to be released, featuring stronger detection performance and end-to-end tracking capabilities.**
 
 **State-of-the-Art Performance of Sparse4Dv2 in the [nuScenes Benchmark](https://www.nuscenes.org/object-detection?externalData=all&mapData=all&modalities=Camera) for Online Models.**
