@@ -1,6 +1,6 @@
 # Sparse4D
 
-**【2024/01/22】The code repository for Sparse4D has been migrated to [HorizonRobotics/Sparse4D](https://github.com/HorizonRobotics/Sparse4D/tree/main), and the code for Sparse4Dv3 has also been open-sourced in the new code repository!!! Everyone is welcome to use it.
+**【2024/01/22】The code repository for Sparse4D has been migrated to [HorizonRobotics/Sparse4D](https://github.com/HorizonRobotics/Sparse4D/tree/main), and the code for Sparse4Dv3 has also been open-sourced in the new code repository!!! Everyone is welcome to use it.**
 
 **【2023/11/21】 The paper of [Sparse4Dv3](https://arxiv.org/abs/2311.11722) has been published.**
 
