@@ -1,5 +1,7 @@
 # Sparse4D
 
+**【2024/06】Our follow-up project, SparseDrive (an end-to-end planning model based on the sparse framework), has been released!!! [arxiv](https://arxiv.org/abs/2405.19620) & [github](https://github.com/swc-17/SparseDrive).**
+
 **【2024/01/22】The code repository for Sparse4D has been migrated to [HorizonRobotics/Sparse4D](https://github.com/HorizonRobotics/Sparse4D/tree/main), and the code for Sparse4Dv3 has also been open-sourced in the new code repository!!! Everyone is welcome to use it.**
 
 **【2023/11/21】 The paper of [Sparse4Dv3](https://arxiv.org/abs/2311.11722) has been published.**
